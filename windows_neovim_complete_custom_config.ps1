@@ -1,10 +1,10 @@
 # =============================================================
 # Neovim + dependencies installer for Windows (PowerShell)
+# Compatibil cu PowerShell 5.x si 7.x
 # Testat pe Windows 10/11
-# Ruleaza cu Administrator: .\nvim_setup_windows.ps1
+# Ruleaza ca user normal (NU ca Administrator):
+# irm "https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/windows_neovim_complete_custom_config.ps1" | iex
 # =============================================================
-
-#Requires -RunAsAdministrator
 
 $ErrorActionPreference = "Stop"
 
@@ -15,12 +15,22 @@ function Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
 function Err   { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red; exit 1 }
 
+function Get-CommandPath {
+    param($name)
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source } else { return $null }
+}
+
+function Refresh-Path {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+}
+
 # ------------------------------------------------------------
-# Verifica Administrator
+# Verifica ca NU rulezi ca Administrator (Scoop nu vrea admin)
 # ------------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Err "Scriptul trebuie rulat ca Administrator! Click dreapta -> Run as Administrator"
+if ($isAdmin) {
+    Err "Nu rula ca Administrator! Deschide PowerShell normal (fara Run as Administrator) si incearca din nou."
 }
 
 # ------------------------------------------------------------
@@ -32,15 +42,15 @@ Info "ExecutionPolicy setat."
 # ------------------------------------------------------------
 # 1. Instaleaza Scoop (daca nu e instalat)
 # ------------------------------------------------------------
-if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+if (-not (Get-CommandPath "scoop")) {
     Info "Instalare Scoop..."
     Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+    Refresh-Path
 } else {
     Info "Scoop deja instalat."
 }
 
-# Refresheaza PATH
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+Refresh-Path
 
 # ------------------------------------------------------------
 # 2. Dependente via Scoop
@@ -54,14 +64,14 @@ $scoopPackages = @(
     "nodejs",
     "ripgrep",
     "universal-ctags",
-    "miniconda3",
     "vcredist2022",
     "7zip",
     "neovim"
 )
 
 foreach ($pkg in $scoopPackages) {
-    if (scoop list $pkg 2>$null | Select-String $pkg) {
+    $installed = scoop list $pkg 2>$null | Select-String $pkg
+    if ($installed) {
         Info "$pkg deja instalat, skip."
     } else {
         Info "Instalare $pkg..."
@@ -69,18 +79,42 @@ foreach ($pkg in $scoopPackages) {
     }
 }
 
-# Refresheaza PATH dupa instalari
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+Refresh-Path
 
 # ------------------------------------------------------------
-# 3. Language servers via npm
+# 3. Python 3.11 via Scoop
+# (3.12/3.13/3.15 sunt prea noi - ujson si alte pachete nu au
+#  wheels precompilate si necesita Visual C++ Build Tools)
+# ------------------------------------------------------------
+Info "Instalare Python 3.11..."
+$installedPy = scoop list python311 2>$null | Select-String "python311"
+if (-not $installedPy) {
+    scoop install python311
+} else {
+    Info "Python 3.11 deja instalat, skip."
+}
+
+# Seteaza python311 ca default
+Info "Setare Python 3.11 ca default..."
+scoop reset python311
+Refresh-Path
+
+$pyVersion = python --version 2>$null
+Info "Python activ: $pyVersion"
+
+if ($pyVersion -notlike "*3.11*") {
+    Warn "Python 3.11 nu e activ in PATH curent. Continuam oricum..."
+}
+
+# ------------------------------------------------------------
+# 4. Language servers via npm
 # ------------------------------------------------------------
 Info "Instalare vim-language-server si bash-language-server..."
 npm install -g vim-language-server
 npm install -g bash-language-server
 
 # ------------------------------------------------------------
-# 4. Python packages
+# 5. Python packages
 # ------------------------------------------------------------
 Info "Instalare pachete Python pentru nvim..."
 $pyPackages = @(
@@ -97,7 +131,7 @@ foreach ($pkg in $pyPackages) {
 }
 
 # ------------------------------------------------------------
-# 5. lua-language-server
+# 6. lua-language-server
 # ------------------------------------------------------------
 $luaLsInstallDir = "$env:USERPROFILE\tools"
 $luaLsDir        = "$luaLsInstallDir\lua-language-server"
@@ -106,7 +140,9 @@ $luaLsLink       = "https://github.com/LuaLS/lua-language-server/releases/downlo
 
 if (-not (Test-Path "$luaLsDir\bin\lua-language-server.exe")) {
     Info "Instalare lua-language-server..."
-    if (-not (Test-Path $luaLsInstallDir)) { New-Item -ItemType Directory -Path $luaLsInstallDir | Out-Null }
+    if (-not (Test-Path $luaLsInstallDir)) {
+        New-Item -ItemType Directory -Path $luaLsInstallDir | Out-Null
+    }
     Invoke-WebRequest $luaLsLink -OutFile $luaLsSrc
     7z x "$luaLsSrc" -o"$luaLsDir" -y | Out-Null
     Info "lua-language-server instalat in $luaLsDir"
@@ -114,15 +150,17 @@ if (-not (Test-Path "$luaLsDir\bin\lua-language-server.exe")) {
     Info "lua-language-server deja instalat."
 }
 
-# Adauga lua-ls in PATH (Machine level)
-$machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-if ($machinePath -notlike "*$luaLsDir\bin*") {
-    [System.Environment]::SetEnvironmentVariable("Path", $machinePath + ";$luaLsDir\bin", "Machine")
+# Adauga lua-ls in PATH (User level - nu necesita admin)
+$userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$luaLsDir\bin*") {
+    [System.Environment]::SetEnvironmentVariable("Path", $userPath + ";$luaLsDir\bin", "User")
     Info "lua-language-server adaugat in PATH."
 }
 
+Refresh-Path
+
 # ------------------------------------------------------------
-# 6. Curata config nvim vechi si cloneaza config jdhao
+# 7. Curata config nvim vechi si cloneaza config jdhao
 # ------------------------------------------------------------
 $nvimConfigDir = "$env:LOCALAPPDATA\nvim"
 
@@ -137,10 +175,10 @@ Info "Clonare config nvim jdhao..."
 git clone --depth=1 https://github.com/jdhao/nvim-config.git $nvimConfigDir
 
 # ------------------------------------------------------------
-# 7. Instaleaza pluginurile headless
+# 8. Instaleaza pluginurile headless
 # ------------------------------------------------------------
 Info "Instalare pluginuri nvim (poate dura cateva minute)..."
-$nvimExe = (Get-Command nvim -ErrorAction SilentlyContinue)?.Source
+$nvimExe = Get-CommandPath "nvim"
 if ($nvimExe) {
     & $nvimExe --headless -c "autocmd User LazyInstall quitall" -c "lua require('lazy').install()" 2>$null
     Info "Pluginuri instalate."
@@ -149,37 +187,32 @@ if ($nvimExe) {
 }
 
 # ------------------------------------------------------------
-# 8. Instaleaza Treesitter parsers
+# 9. Instaleaza Treesitter parsers
 # ------------------------------------------------------------
 Info "Instalare Treesitter parsers..."
 if ($nvimExe) {
     & $nvimExe --headless +"TSInstall css html javascript typescript tsx vue scss svelte lua python bash" +qa 2>$null
+    Info "Parsers instalati."
 }
 
 # ------------------------------------------------------------
 # Verificare finala
 # ------------------------------------------------------------
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+Refresh-Path
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Info "Instalare completa!"
 Write-Host "============================================" -ForegroundColor Cyan
 
-$checks = @{
-    "nvim"   = (Get-Command nvim   -ErrorAction SilentlyContinue)?.Source
-    "node"   = (Get-Command node   -ErrorAction SilentlyContinue)?.Source
-    "python" = (Get-Command python  -ErrorAction SilentlyContinue)?.Source
-    "rg"     = (Get-Command rg     -ErrorAction SilentlyContinue)?.Source
-    "ctags"  = (Get-Command ctags  -ErrorAction SilentlyContinue)?.Source
-}
-
-foreach ($tool in $checks.GetEnumerator()) {
-    if ($tool.Value) {
-        Write-Host "  $($tool.Key): " -NoNewline
-        Write-Host "OK - $($tool.Value)" -ForegroundColor Green
+$toolsToCheck = @("nvim", "node", "python", "rg", "ctags")
+foreach ($tool in $toolsToCheck) {
+    $path = Get-CommandPath $tool
+    if ($path) {
+        Write-Host "  $tool`: " -NoNewline
+        Write-Host "OK - $path" -ForegroundColor Green
     } else {
-        Write-Host "  $($tool.Key): " -NoNewline
+        Write-Host "  $tool`: " -NoNewline
         Write-Host "LIPSA - reporneste terminalul" -ForegroundColor Yellow
     }
 }
@@ -188,5 +221,5 @@ Write-Host ""
 Warn "Reporneste terminalul/PowerShell dupa instalare!"
 Warn "Apoi ruleaza 'nvim' pentru a porni."
 Write-Host ""
-Info "Nerd Font recomandat pentru iconite: https://www.nerdfonts.com/font-downloads"
+Info "Nerd Font recomandat: https://www.nerdfonts.com/font-downloads"
 Info "Instaleaza 'JetBrainsMono Nerd Font' si seteaza-l in terminalul tau."
