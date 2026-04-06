@@ -6,7 +6,8 @@ Two automated bash scripts that set up a complete development environment on WSL
 
 - **`install_docker_wsl.sh`** – Sets up Docker on WSL2 without Docker Desktop
 - **`linux_install_apps.sh`** – Installs development tools and utilities
-
+- **`linux_neovim_complete_custom_config.sh`** – Installs development tools and utilities
+- **`windows_neovim_complete_custom_config.ps1`** – Installs development tools and utilities
 ---
 
 ## Quick Start
@@ -19,6 +20,12 @@ curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/
 
 # All development tools
 curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_apps/linux_install_apps.sh | bash
+
+# Install Neovim with a more or less complete custom config (Linux)
+curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_neovim_complete_custom_config.sh | bash
+
+# Install Neovim with a more or less complete custom config (Windows)
+irm "https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/windows_neovim_complete_custom_config.ps1" | iex
 ```
 
 ### Verify Installations
