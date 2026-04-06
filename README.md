@@ -9,6 +9,32 @@ Two automated bash scripts that set up a complete development environment on WSL
 
 ---
 
+## Quick Start
+
+### Install Everything
+
+```bash
+# Docker on WSL2
+curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_apps/install_docker_wsl.sh | bash
+
+# All development tools
+curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_apps/linux_install_apps.sh | bash
+```
+
+### Verify Installations
+
+```bash
+# Docker
+docker --version
+docker run hello-world
+
+# Tools
+btop --version
+lsd --version
+hx --version
+brew --version
+```
+
 ## 🐳 Docker WSL Setup (`install_docker_wsl.sh`)
 
 Installs Docker and essential Docker components directly on WSL2.
@@ -83,34 +109,6 @@ Installs a comprehensive suite of development and terminal utilities.
 | Tool | Purpose |
 |------|---------|
 | **Starship** | Modern shell prompt with git info |
-
----
-
-## 🚀 Quick Start
-
-### Install Everything
-
-```bash
-# Docker on WSL2
-curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_apps/install_docker_wsl.sh | bash
-
-# All development tools
-curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_apps/linux_install_apps.sh | bash
-```
-
-### Verify Installations
-
-```bash
-# Docker
-docker --version
-docker run hello-world
-
-# Tools
-btop --version
-lsd --version
-hx --version
-brew --version
-```
 
 ---
 
