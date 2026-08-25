@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================
-# Helix + dependencies installer for Linux
-# Supports: Ubuntu, Debian, Arch Linux, Alpine Linux
+# Helix + development tools installer for Linux
+# Supports: Ubuntu, Debian, Linux Mint, Arch Linux, Alpine Linux
 #
 # Run:
-#   bash helix_setup_linux.sh
+#   bash helix_setup_linux_complete.sh
 #
-# Installs Helix, language servers and dependencies, configures
-# ~/.config/helix, configures ~/.zshrc, and sets zsh as the
-# default login shell.
+# Installs Helix, zsh, language servers, Homebrew tools, Starship,
+# TUI tools and configures ~/.config/helix and ~/.zshrc.
 # =============================================================
 set -Eeuo pipefail
 
@@ -83,6 +82,14 @@ pkg_update() {
     esac
 }
 
+pkg_upgrade() {
+    case "$DISTRO" in
+        debian) sudo apt-get upgrade -y ;;
+        arch)   sudo pacman -Su --noconfirm ;;
+        alpine) sudo apk upgrade ;;
+    esac
+}
+
 pkg_install() {
     case "$DISTRO" in
         debian) sudo apt-get install -y "$@" ;;
@@ -91,9 +98,25 @@ pkg_install() {
     esac
 }
 
+install_optional_pipx_package() {
+    local package="$1"
+
+    if command -v pipx >/dev/null 2>&1; then
+        if pipx list 2>/dev/null | grep -q "package $package "; then
+            info "$package este deja instalat prin pipx."
+        else
+            pipx install "$package"
+        fi
+    else
+        warn "pipx nu este disponibil; sar peste $package."
+    fi
+}
+
 # ------------------------------------------------------------
-# Directoare
+# Directoare si variabile
 # ------------------------------------------------------------
+detect_distro
+
 TOOLS_DIR="$HOME/tools"
 PACKAGES_DIR="$HOME/packages"
 HELIX_DIR="$TOOLS_DIR/helix"
@@ -101,19 +124,18 @@ HELIX_CONFIG_DIR="$HOME/.config/helix"
 PY_VENV="$HOME/.local/share/helix/python-venv"
 ZSHRC="$HOME/.zshrc"
 NVM_DIR="$HOME/.nvm"
+LOCAL_BIN="$HOME/.local/bin"
+BREW_BIN='/home/linuxbrew/.linuxbrew/bin/brew'
+BREW_PREFIX=''
 
-mkdir -p "$TOOLS_DIR" "$PACKAGES_DIR" "$HELIX_CONFIG_DIR"
-
-# ------------------------------------------------------------
-# Detectare distributie
-# ------------------------------------------------------------
-detect_distro
+mkdir -p "$TOOLS_DIR" "$PACKAGES_DIR" "$HELIX_CONFIG_DIR" "$LOCAL_BIN"
 
 # ------------------------------------------------------------
-# Dependente sistem
+# Update si dependente sistem
 # ------------------------------------------------------------
-section 'Instalare dependente sistem'
+section 'Update sistem si instalare dependente'
 pkg_update
+pkg_upgrade
 
 case "$DISTRO" in
     debian)
@@ -122,7 +144,8 @@ case "$DISTRO" in
             build-essential pkg-config \
             python3 python3-pip python3-venv \
             ripgrep fd-find universal-ctags \
-            tree bat fzf jq shellcheck zsh
+            tree bat fzf jq shellcheck zsh \
+            dnsutils btop lsd duf pipx tmux
         ;;
     arch)
         pkg_install \
@@ -130,7 +153,8 @@ case "$DISTRO" in
             base-devel pkgconf \
             python python-pip \
             ripgrep fd ctags \
-            tree bat fzf jq shellcheck zsh
+            tree bat fzf jq shellcheck zsh \
+            bind btop lsd duf python-pipx tmux
         ;;
     alpine)
         pkg_install \
@@ -138,82 +162,124 @@ case "$DISTRO" in
             build-base pkgconf \
             python3 py3-pip py3-virtualenv \
             ripgrep fd ctags \
-            tree bat fzf jq shellcheck zsh
+            tree bat fzf jq shellcheck zsh \
+            bind-tools btop lsd duf tmux
         ;;
 esac
 
-# Debian calls the executable fdfind.
 if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
-    mkdir -p "$HOME/.local/bin"
-    ln -sfn "$(command -v fdfind)" "$HOME/.local/bin/fd"
+    ln -sfn "$(command -v fdfind)" "$LOCAL_BIN/fd"
 fi
 
 # ------------------------------------------------------------
 # zsh ca shell implicit
 # ------------------------------------------------------------
 section 'Configurare zsh ca shell implicit'
-
 ZSH_BIN="$(command -v zsh || true)"
 [[ -n "$ZSH_BIN" && -x "$ZSH_BIN" ]] || error 'zsh nu a fost gasit dupa instalare.'
 
-if [[ ! -r /etc/shells ]]; then
-    error '/etc/shells nu poate fi citit.'
-fi
-
 if ! grep -Fxq "$ZSH_BIN" /etc/shells; then
-    info "Adaug $ZSH_BIN in /etc/shells..."
     printf '%s\n' "$ZSH_BIN" | sudo tee -a /etc/shells >/dev/null
 fi
 
 CURRENT_LOGIN_SHELL="$(getent passwd "$USER" | cut -d: -f7 || true)"
 if [[ "$CURRENT_LOGIN_SHELL" == "$ZSH_BIN" ]]; then
-    info "zsh este deja shell-ul implicit pentru utilizatorul $USER."
+    info "zsh este deja shell-ul implicit pentru $USER."
 elif [[ -t 0 ]]; then
-    info "Setez zsh ca shell implicit pentru utilizatorul $USER..."
     chsh -s "$ZSH_BIN"
-    info 'Schimbarea va deveni activa la urmatoarea autentificare.'
+    info 'zsh va deveni activ la urmatoarea autentificare.'
 else
-    warn 'Sesiunea nu este interactiva; nu pot executa chsh automat.'
-    warn "Ruleaza manual: chsh -s '$ZSH_BIN'"
+    warn 'Sesiunea nu este interactiva; ruleaza manual: chsh -s '"$ZSH_BIN"''
 fi
 
 # ------------------------------------------------------------
-# bash-language-server pentru Helix
+# Homebrew
+# ------------------------------------------------------------
+section 'Instalare Homebrew'
+
+if [[ ! -x "$BREW_BIN" ]]; then
+    NONINTERACTIVE=1 /bin/bash -c \
+        "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+
+[[ -x "$BREW_BIN" ]] || error 'Homebrew nu a putut fi instalat.'
+BREW_PREFIX="$($BREW_BIN --prefix)"
+eval "$("$BREW_BIN" shellenv)"
+
+# ------------------------------------------------------------
+# Pachete Homebrew
+# ------------------------------------------------------------
+section 'Instalare pachete Homebrew'
+for package in lazydocker fd tldr posting; do
+    if "$BREW_BIN" list "$package" >/dev/null 2>&1; then
+        info "$package este deja instalat."
+    else
+        "$BREW_BIN" install "$package"
+    fi
+done
+
+# ------------------------------------------------------------
+# pipx
+# ------------------------------------------------------------
+section 'Instalare aplicatii pipx'
+pipx ensurepath >/dev/null 2>&1 || true
+install_optional_pipx_package tui-2048
+
+# ------------------------------------------------------------
+# TUIOS
+# ------------------------------------------------------------
+section 'Instalare TUIOS'
+if command -v tuios >/dev/null 2>&1; then
+    info 'TUIOS este deja instalat.'
+else
+    curl -fsSL \
+        https://raw.githubusercontent.com/Gaurav-Gosain/tuios/main/install.sh |
+        bash
+fi
+
+# ------------------------------------------------------------
+# Starship
+# ------------------------------------------------------------
+section 'Instalare Starship'
+if command -v starship >/dev/null 2>&1; then
+    info 'Starship este deja instalat.'
+else
+    curl -sS https://starship.rs/install.sh | sh -s -- --yes
+fi
+
+mkdir -p "$HOME/.config"
+if command -v starship >/dev/null 2>&1; then
+    starship preset pastel-powerline -o "$HOME/.config/starship.toml"
+fi
+
+# ------------------------------------------------------------
+# bash-language-server prin NVM
 # ------------------------------------------------------------
 section 'Instalare bash-language-server pentru Helix'
 export NVM_DIR
 
 if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
-    info 'Instalare NVM 0.40.7...'
     curl -fsSL \
         https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh |
         bash
 fi
 
 # shellcheck disable=SC1090
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-    source "$NVM_DIR/nvm.sh"
-fi
+[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
 
 if command -v nvm >/dev/null 2>&1; then
     nvm install --lts
     nvm alias default 'lts/*'
     nvm use --lts >/dev/null
-    info "Node.js: $(node --version)"
-
-    if command -v bash-language-server >/dev/null 2>&1; then
-        info 'bash-language-server este deja instalat.'
-    else
-        npm install --global bash-language-server
-    fi
+    npm install --global bash-language-server
 else
-    warn 'NVM nu este disponibil in sesiunea curenta.'
+    warn 'NVM nu este disponibil; bash-language-server nu a fost instalat.'
 fi
 
 # ------------------------------------------------------------
-# Pachete Python in mediu virtual izolat
+# Pachete Python pentru Helix
 # ------------------------------------------------------------
-section 'Instalare pachete Python'
+section 'Instalare language server Python'
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
 [[ -n "$PYTHON_BIN" ]] || error 'Python nu a fost gasit.'
 
@@ -237,21 +303,14 @@ LUA_LS_VERSION='3.6.11'
 
 if [[ ! -x "$LUA_LS_DIR/bin/lua-language-server" ]]; then
     case "$(uname -m)" in
-        x86_64)
-            LUA_LS_ARCH='linux-x64'
-            ;;
-        aarch64|arm64)
-            LUA_LS_ARCH='linux-arm64'
-            ;;
-        *)
-            error "Arhitectura $(uname -m) nu este suportata pentru lua-language-server."
-            ;;
+        x86_64) LUA_LS_ARCH='linux-x64' ;;
+        aarch64|arm64) LUA_LS_ARCH='linux-arm64' ;;
+        *) error "Arhitectura $(uname -m) nu este suportata pentru lua-language-server." ;;
     esac
 
     LUA_LS_SRC="$PACKAGES_DIR/lua-language-server-${LUA_LS_VERSION}.tar.gz"
     LUA_LS_URL="https://github.com/LuaLS/lua-language-server/releases/download/${LUA_LS_VERSION}/lua-language-server-${LUA_LS_VERSION}-${LUA_LS_ARCH}.tar.gz"
 
-    info "Descarcare lua-language-server ${LUA_LS_VERSION}..."
     wget -q "$LUA_LS_URL" -O "$LUA_LS_SRC"
     rm -rf "$LUA_LS_DIR"
     mkdir -p "$LUA_LS_DIR"
@@ -262,12 +321,6 @@ fi
 # Helix
 # ------------------------------------------------------------
 section 'Instalare Helix'
-BREW_BIN='/home/linuxbrew/.linuxbrew/bin/brew'
-BREW_PREFIX=''
-
-if [[ -x "$BREW_BIN" ]]; then
-    BREW_PREFIX="$($BREW_BIN --prefix)"
-fi
 
 if [[ -n "$BREW_PREFIX" ]]; then
     if "$BREW_BIN" list helix >/dev/null 2>&1; then
@@ -277,36 +330,26 @@ if [[ -n "$BREW_PREFIX" ]]; then
     fi
 else
     case "$(uname -m)" in
-        x86_64)
-            HELIX_ARCH='x86_64'
-            ;;
-        aarch64|arm64)
-            HELIX_ARCH='aarch64'
-            ;;
-        *)
-            error "Arhitectura $(uname -m) nu este suportata pentru Helix."
-            ;;
+        x86_64) HELIX_ARCH='x86_64' ;;
+        aarch64|arm64) HELIX_ARCH='aarch64' ;;
+        *) error "Arhitectura $(uname -m) nu este suportata pentru Helix." ;;
     esac
 
     HELIX_VERSION="$(
-        curl -fsSL \
-            https://api.github.com/repos/helix-editor/helix/releases/latest |
-            grep -m1 '"tag_name"' |
-            sed -E 's/.*"tag_name": "([^"]+)".*/\1/'
+        curl -fsSL https://api.github.com/repos/helix-editor/helix/releases/latest |
+        grep -m1 '"tag_name"' |
+        sed -E 's/.*"tag_name": "([^"]+)".*/\1/'
     )"
     [[ -n "$HELIX_VERSION" ]] || error 'Nu pot determina versiunea Helix.'
 
     HELIX_SRC="$PACKAGES_DIR/helix.tar.xz"
     HELIX_URL="https://github.com/helix-editor/helix/releases/download/${HELIX_VERSION}/helix-${HELIX_VERSION#v}-${HELIX_ARCH}-linux.tar.xz"
 
-    info "Descarcare Helix ${HELIX_VERSION}..."
     wget -q "$HELIX_URL" -O "$HELIX_SRC"
     rm -rf "$HELIX_DIR"
     mkdir -p "$HELIX_DIR"
     tar -xJf "$HELIX_SRC" --strip-components=1 -C "$HELIX_DIR"
-
-    mkdir -p "$HOME/.local/bin"
-    ln -sfn "$HELIX_DIR/hx" "$HOME/.local/bin/hx"
+    ln -sfn "$HELIX_DIR/hx" "$LOCAL_BIN/hx"
 fi
 
 # ------------------------------------------------------------
@@ -314,7 +357,6 @@ fi
 # ------------------------------------------------------------
 section 'Configurare ~/.zshrc'
 touch "$ZSHRC"
-
 BACKUP="$ZSHRC.backup.$(date +%Y%m%d-%H%M%S)"
 cp "$ZSHRC" "$BACKUP"
 info "Backup creat: $BACKUP"
@@ -327,36 +369,53 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-for name in ("HELIX_SETUP_PATH", "HELIX_SETUP_NVM", "HELIX_SETUP_ENV"):
+for name in (
+    "HELIX_SETUP_PATH",
+    "HELIX_SETUP_NVM",
+    "HELIX_SETUP_ENV",
+    "HELIX_SETUP_BREW",
+    "HELIX_SETUP_STARSHIP",
+):
     pattern = rf"\n?# >>> {name} >>>.*?\n# <<< {name} <<<\n?"
     text = re.sub(pattern, "\n", text, flags=re.S)
 
 path.write_text(text)
 PY
 
-cat >> "$ZSHRC" <<'EOF'
+cat >> "$ZSHRC" <<EOF
 
 # >>> HELIX_SETUP_PATH >>>
-# PATH managed by helix_setup_linux.sh
+# PATH managed by helix_setup_linux_complete.sh
 typeset -U PATH path
 path=(
-  "$HOME/.local/bin"
-  "$HOME/tools/lua-language-server/bin"
-  "/home/linuxbrew/.linuxbrew/bin"
-  "$path[@]"
+  "$LOCAL_BIN"
+  "$LUA_LS_DIR/bin"
+  "$BREW_PREFIX/bin"
+  "$BREW_PREFIX/sbin"
+  "\$path[@]"
 )
 # <<< HELIX_SETUP_PATH <<<
 
+# >>> HELIX_SETUP_BREW >>>
+# Homebrew managed by helix_setup_linux_complete.sh
+eval "\$("$BREW_BIN" shellenv)"
+# <<< HELIX_SETUP_BREW <<<
+
 # >>> HELIX_SETUP_NVM >>>
-# NVM managed by helix_setup_linux.sh
-export NVM_DIR="$HOME/.nvm"
-[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+# NVM managed by helix_setup_linux_complete.sh
+export NVM_DIR="\$HOME/.nvm"
+[[ -s "\$NVM_DIR/nvm.sh" ]] && source "\$NVM_DIR/nvm.sh"
 # <<< HELIX_SETUP_NVM <<<
 
+# >>> HELIX_SETUP_STARSHIP >>>
+# Starship managed by helix_setup_linux_complete.sh
+eval "\$(starship init zsh)"
+# <<< HELIX_SETUP_STARSHIP <<<
+
 # >>> HELIX_SETUP_ENV >>>
-# Helix managed by helix_setup_linux.sh
-if [[ -d "$HOME/tools/helix/runtime" ]]; then
-    export HELIX_RUNTIME="$HOME/tools/helix/runtime"
+# Helix managed by helix_setup_linux_complete.sh
+if [[ -d "\$HOME/tools/helix/runtime" ]]; then
+    export HELIX_RUNTIME="\$HOME/tools/helix/runtime"
 else
     unset HELIX_RUNTIME
 fi
@@ -392,7 +451,7 @@ else
 fi
 
 cat > "$HELIX_CONFIG_DIR/languages.toml" <<EOF
-# Generated by helix_setup_linux.sh
+# Generated by helix_setup_linux_complete.sh
 
 [[language]]
 name = "bash"
@@ -424,19 +483,12 @@ EOF
 section 'Verificare finala'
 
 HX_BIN="$(command -v hx || true)"
-if [[ -z "$HX_BIN" ]]; then
-    if [[ -x "$HOME/.local/bin/hx" ]]; then
-        HX_BIN="$HOME/.local/bin/hx"
-    elif [[ -n "$BREW_PREFIX" && -x "$BREW_PREFIX/bin/hx" ]]; then
-        HX_BIN="$BREW_PREFIX/bin/hx"
-    fi
+if [[ -z "$HX_BIN" && -x "$LOCAL_BIN/hx" ]]; then
+    HX_BIN="$LOCAL_BIN/hx"
 fi
 
-if [[ -n "$HX_BIN" && -x "$HX_BIN" ]]; then
-    HELIX_INFO="$($HX_BIN --version | head -1)"
-else
-    HELIX_INFO='restart shell'
-fi
+HELIX_INFO='lipsa'
+[[ -n "$HX_BIN" && -x "$HX_BIN" ]] && HELIX_INFO="$($HX_BIN --version | head -1)"
 
 printf '  %-24s %s\n' 'helix:' "$HELIX_INFO"
 printf '  %-24s %s\n' 'zsh:' "$(zsh --version 2>/dev/null || echo 'lipsa')"
@@ -447,6 +499,8 @@ printf '  %-24s %s\n' 'python3:' "$($PYTHON_BIN --version)"
 printf '  %-24s %s\n' 'ripgrep:' "$(rg --version 2>/dev/null | head -1 || echo 'lipsa')"
 printf '  %-24s %s\n' 'ctags:' "$(ctags --version 2>/dev/null | head -1 || echo 'lipsa')"
 printf '  %-24s %s\n' 'lua-language-server:' "$([[ -x "$LUA_LS_DIR/bin/lua-language-server" ]] && echo 'instalat' || echo 'lipsa')"
+printf '  %-24s %s\n' 'starship:' "$(starship --version 2>/dev/null | head -1 || echo 'lipsa')"
+printf '  %-24s %s\n' 'brew:' "$("$BREW_BIN" --version 2>/dev/null | head -1 || echo 'lipsa')"
 printf '  %-24s %s\n' 'config:' "$HELIX_CONFIG_DIR"
 printf '  %-24s %s\n' 'zshrc:' "$ZSHRC"
 
@@ -455,4 +509,5 @@ echo 'Instalare completa.'
 echo 'Shell implicit: zsh'
 echo 'Ruleaza: exec zsh'
 echo 'Apoi verifica Helix cu: hx --health'
+echo 'Verifica tool-urile cu: brew list, pipx list si command -v tuios'
 echo 'Porneste Helix cu: hx'
