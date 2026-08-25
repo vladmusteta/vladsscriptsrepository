@@ -21,8 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/
 # All development tools
 curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_apps/linux_install_apps.sh | bash
 
-# Install Neovim with a more or less complete custom config (Linux)
-curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_neovim_complete_custom_config.sh | bash
+# Install Helix with a more or less complete custom config (Linux)
+curl -fsSL https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/linux_helix_complete_custom_config.sh | bash
 
 # Install Neovim with a more or less complete custom config (Windows)
 irm "https://raw.githubusercontent.com/vladmusteta/vladsscriptsrepository/refs/heads/main/windows_neovim_complete_custom_config.ps1" | iex
