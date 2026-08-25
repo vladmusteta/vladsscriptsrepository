@@ -6,8 +6,9 @@
 # Run:
 #   bash helix_setup_linux.sh
 #
-# The script installs Helix, language servers and dependencies,
-# configures ~/.config/helix, and adds managed blocks to ~/.zshrc.
+# Installs Helix, language servers and dependencies, configures
+# ~/.config/helix, configures ~/.zshrc, and sets zsh as the
+# default login shell.
 # =============================================================
 set -Eeuo pipefail
 
@@ -22,18 +23,16 @@ warn()    { printf '%b[WARN]%b  %s\n' "$YELLOW" "$NC" "$*"; }
 error()   { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
 section() { printf '\n%b==> %s%b\n' "$CYAN" "$*" "$NC"; }
 
-# ------------------------------------------------------------
-# Basic checks
-# ------------------------------------------------------------
 [[ -n "${BASH_VERSION:-}" ]] || error 'Ruleaza acest script cu bash.'
 [[ "$(id -u)" -ne 0 ]] || error 'Nu rula scriptul ca root; este necesar sudo pentru pachetele sistem.'
+command -v sudo >/dev/null 2>&1 || error 'sudo nu este instalat sau nu este disponibil.'
 
-if ! command -v sudo >/dev/null 2>&1; then
-    error 'sudo nu este instalat sau nu este disponibil.'
-fi
+DISTRO_ID=''
+DISTRO_LIKE=''
+DISTRO=''
 
 # ------------------------------------------------------------
-# Detecteaza distributia
+# Detectare distributie
 # ------------------------------------------------------------
 detect_distro() {
     if [[ -r /etc/os-release ]]; then
@@ -101,6 +100,7 @@ HELIX_DIR="$TOOLS_DIR/helix"
 HELIX_CONFIG_DIR="$HOME/.config/helix"
 PY_VENV="$HOME/.local/share/helix/python-venv"
 ZSHRC="$HOME/.zshrc"
+NVM_DIR="$HOME/.nvm"
 
 mkdir -p "$TOOLS_DIR" "$PACKAGES_DIR" "$HELIX_CONFIG_DIR"
 
@@ -122,7 +122,7 @@ case "$DISTRO" in
             build-essential pkg-config \
             python3 python3-pip python3-venv \
             ripgrep fd-find universal-ctags \
-            tree bat fzf jq shellcheck
+            tree bat fzf jq shellcheck zsh
         ;;
     arch)
         pkg_install \
@@ -130,15 +130,15 @@ case "$DISTRO" in
             base-devel pkgconf \
             python python-pip \
             ripgrep fd ctags \
-            tree bat fzf jq shellcheck
+            tree bat fzf jq shellcheck zsh
         ;;
     alpine)
         pkg_install \
             git curl wget unzip tar gzip xz \
             build-base pkgconf \
-            python3 py3-pip \
+            python3 py3-pip py3-virtualenv \
             ripgrep fd ctags \
-            tree bat fzf jq shellcheck
+            tree bat fzf jq shellcheck zsh
         ;;
 esac
 
@@ -149,15 +149,45 @@ if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------
-# Node.js via NVM
+# zsh ca shell implicit
 # ------------------------------------------------------------
-section 'Instalare Node.js via NVM'
-NVM_DIR="$HOME/.nvm"
+section 'Configurare zsh ca shell implicit'
+
+ZSH_BIN="$(command -v zsh || true)"
+[[ -n "$ZSH_BIN" && -x "$ZSH_BIN" ]] || error 'zsh nu a fost gasit dupa instalare.'
+
+if [[ ! -r /etc/shells ]]; then
+    error '/etc/shells nu poate fi citit.'
+fi
+
+if ! grep -Fxq "$ZSH_BIN" /etc/shells; then
+    info "Adaug $ZSH_BIN in /etc/shells..."
+    printf '%s\n' "$ZSH_BIN" | sudo tee -a /etc/shells >/dev/null
+fi
+
+CURRENT_LOGIN_SHELL="$(getent passwd "$USER" | cut -d: -f7 || true)"
+if [[ "$CURRENT_LOGIN_SHELL" == "$ZSH_BIN" ]]; then
+    info "zsh este deja shell-ul implicit pentru utilizatorul $USER."
+elif [[ -t 0 ]]; then
+    info "Setez zsh ca shell implicit pentru utilizatorul $USER..."
+    chsh -s "$ZSH_BIN"
+    info 'Schimbarea va deveni activa la urmatoarea autentificare.'
+else
+    warn 'Sesiunea nu este interactiva; nu pot executa chsh automat.'
+    warn "Ruleaza manual: chsh -s '$ZSH_BIN'"
+fi
+
+# ------------------------------------------------------------
+# bash-language-server pentru Helix
+# ------------------------------------------------------------
+section 'Instalare bash-language-server pentru Helix'
 export NVM_DIR
 
 if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
     info 'Instalare NVM 0.40.7...'
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash
+    curl -fsSL \
+        https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh |
+        bash
 fi
 
 # shellcheck disable=SC1090
@@ -170,18 +200,18 @@ if command -v nvm >/dev/null 2>&1; then
     nvm alias default 'lts/*'
     nvm use --lts >/dev/null
     info "Node.js: $(node --version)"
+
+    if command -v bash-language-server >/dev/null 2>&1; then
+        info 'bash-language-server este deja instalat.'
+    else
+        npm install --global bash-language-server
+    fi
 else
     warn 'NVM nu este disponibil in sesiunea curenta.'
 fi
 
-if command -v npm >/dev/null 2>&1; then
-    npm install --global bash-language-server vim-language-server
-else
-    warn 'npm nu este disponibil; language server-ul Bash nu a fost instalat.'
-fi
-
 # ------------------------------------------------------------
-# Python packages in an isolated virtual environment
+# Pachete Python in mediu virtual izolat
 # ------------------------------------------------------------
 section 'Instalare pachete Python'
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
@@ -193,12 +223,10 @@ fi
 
 "$PY_VENV/bin/python" -m pip install --upgrade pip
 "$PY_VENV/bin/python" -m pip install \
-    pynvim \
     'python-lsp-server[all]' \
     pylsp-mypy \
     python-lsp-isort \
-    python-lsp-black \
-    vim-vint
+    python-lsp-black
 
 # ------------------------------------------------------------
 # lua-language-server
@@ -260,13 +288,12 @@ else
             ;;
     esac
 
-    require_curl_api() {
-        command -v curl >/dev/null 2>&1 || error 'curl este necesar pentru instalarea Helix.'
-    }
-    require_curl_api
-
-    HELIX_VERSION="$(curl -fsSL https://api.github.com/repos/helix-editor/helix/releases/latest | \
-        grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')"
+    HELIX_VERSION="$(
+        curl -fsSL \
+            https://api.github.com/repos/helix-editor/helix/releases/latest |
+            grep -m1 '"tag_name"' |
+            sed -E 's/.*"tag_name": "([^"]+)".*/\1/'
+    )"
     [[ -n "$HELIX_VERSION" ]] || error 'Nu pot determina versiunea Helix.'
 
     HELIX_SRC="$PACKAGES_DIR/helix.tar.xz"
@@ -283,7 +310,7 @@ else
 fi
 
 # ------------------------------------------------------------
-# Configureaza ~/.zshrc
+# Configurare ~/.zshrc
 # ------------------------------------------------------------
 section 'Configurare ~/.zshrc'
 touch "$ZSHRC"
@@ -292,7 +319,6 @@ BACKUP="$ZSHRC.backup.$(date +%Y%m%d-%H%M%S)"
 cp "$ZSHRC" "$BACKUP"
 info "Backup creat: $BACKUP"
 
-# Remove only blocks managed by this installer.
 python3 - "$ZSHRC" <<'PY'
 from pathlib import Path
 import re
@@ -315,9 +341,6 @@ cat >> "$ZSHRC" <<'EOF'
 typeset -U PATH path
 path=(
   "$HOME/.local/bin"
-  "$HOME/tools/nodejs/bin"
-  "$HOME/tools/ripgrep"
-  "$HOME/tools/ctags/bin"
   "$HOME/tools/lua-language-server/bin"
   "/home/linuxbrew/.linuxbrew/bin"
   "$path[@]"
@@ -332,12 +355,16 @@ export NVM_DIR="$HOME/.nvm"
 
 # >>> HELIX_SETUP_ENV >>>
 # Helix managed by helix_setup_linux.sh
-export HELIX_RUNTIME="$HOME/tools/helix/runtime"
+if [[ -d "$HOME/tools/helix/runtime" ]]; then
+    export HELIX_RUNTIME="$HOME/tools/helix/runtime"
+else
+    unset HELIX_RUNTIME
+fi
 # <<< HELIX_SETUP_ENV <<<
 EOF
 
 # ------------------------------------------------------------
-# Configureaza Helix
+# Configurare Helix
 # ------------------------------------------------------------
 section 'Configurare Helix'
 
@@ -400,7 +427,7 @@ HX_BIN="$(command -v hx || true)"
 if [[ -z "$HX_BIN" ]]; then
     if [[ -x "$HOME/.local/bin/hx" ]]; then
         HX_BIN="$HOME/.local/bin/hx"
-    elif [[ -x "$BREW_PREFIX/bin/hx" ]]; then
+    elif [[ -n "$BREW_PREFIX" && -x "$BREW_PREFIX/bin/hx" ]]; then
         HX_BIN="$BREW_PREFIX/bin/hx"
     fi
 fi
@@ -412,7 +439,10 @@ else
 fi
 
 printf '  %-24s %s\n' 'helix:' "$HELIX_INFO"
+printf '  %-24s %s\n' 'zsh:' "$(zsh --version 2>/dev/null || echo 'lipsa')"
+printf '  %-24s %s\n' 'default shell:' "$(getent passwd "$USER" | cut -d: -f7 || echo 'necunoscut')"
 printf '  %-24s %s\n' 'node:' "$(node --version 2>/dev/null || echo 'restart shell')"
+printf '  %-24s %s\n' 'bash-language-server:' "$(bash-language-server --version 2>/dev/null || echo 'lipsa')"
 printf '  %-24s %s\n' 'python3:' "$($PYTHON_BIN --version)"
 printf '  %-24s %s\n' 'ripgrep:' "$(rg --version 2>/dev/null | head -1 || echo 'lipsa')"
 printf '  %-24s %s\n' 'ctags:' "$(ctags --version 2>/dev/null | head -1 || echo 'lipsa')"
@@ -422,6 +452,7 @@ printf '  %-24s %s\n' 'zshrc:' "$ZSHRC"
 
 echo
 echo 'Instalare completa.'
+echo 'Shell implicit: zsh'
 echo 'Ruleaza: exec zsh'
-echo 'Apoi verifica: hx --health'
+echo 'Apoi verifica Helix cu: hx --health'
 echo 'Porneste Helix cu: hx'
